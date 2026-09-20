@@ -235,19 +235,23 @@ async function sendEmailViaResend(
     to: string,
     subject: string,
     body: string,
-    const fromLabel = "AdminAgent <onboarding@resend.dev>";
+    fromLabel: string = "AdminAgent <onboarding@resend.dev>"
 ): Promise<{ id: string | null }> {
+    console.log(" Attempting to send email to:", to);
+
     const { data, error } = await resend.emails.send({
         from: fromLabel,
         to,
         subject,
-        text: body,
+        html: body,
     });
 
     if (error) {
-        throw new Error(`Resend API error: ${error.message}`);
+        console.error("❌ Resend error:", error);
+        throw error;
     }
 
+    console.log("✅ Email sent successfully:", data?.id);
     return { id: data?.id ?? null };
 }
 
