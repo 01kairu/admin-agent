@@ -1,8 +1,12 @@
 "use client";
+import { useRef, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@supabase/supabase-js";
 
-import { useRef, useState } from "react";
-
-const DUMMY_USER_ID = "814b2896-3a24-4fde-90a2-ff1911a149d6";
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 type StepName =
   | "task_created"
@@ -21,7 +25,7 @@ interface AgentStep {
 
 const STEP_META: Record<StepName, { icon: string; label: string }> = {
   task_created: { icon: "📋", label: "Task opened" },
-  research: { icon: "", label: "Researching" },
+  research: { icon: "🔍", label: "Researching" },
   draft_email: { icon: "✍️", label: "Drafting" },
   send_email: { icon: "📤", label: "Sending" },
   completed: { icon: "✅", label: "Done" },
@@ -37,6 +41,11 @@ function formatTime(iso: string): string {
 }
 
 export default function Dashboard() {
+  const router = useRouter();
+
+  // ✅ ALL HOOKS DECLARED FIRST (Fixes the Rules of Hooks error)
+  const [isLoading, setIsLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
   const [taskDescription, setTaskDescription] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [recipientEmail, setRecipientEmail] = useState("");
@@ -45,6 +54,30 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
 
   const bufferRef = useRef("");
+
+  // ✅ AUTH CHECK (Runs after all hooks are registered)
+  useEffect(() => {
+    async function checkUser() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push("/login");
+      } else {
+        setUserId(session.user.id); // Use real user ID instead of dummy
+        setUserEmail(session.user.email || ""); // Auto-fill email
+        setIsLoading(false);
+      }
+    }
+    checkUser();
+  }, [router]);
+
+  // ✅ CONDITIONAL RETURN (Placed AFTER all hooks)
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#14181F] flex items-center justify-center text-white">
+        <p>Loading your dashboard...</p>
+      </div>
+    );
+  }
 
   async function handleRunAgent(e: React.FormEvent) {
     e.preventDefault();
@@ -61,7 +94,7 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           taskDescription: taskDescription.trim(),
-          userId: DUMMY_USER_ID,
+          userId: userId || "814b2896-3a24-4fde-90a2-ff1911a149d6",
           userEmail: userEmail.trim() || undefined,
           recipientEmail: recipientEmail.trim() || undefined,
         }),
@@ -106,13 +139,24 @@ export default function Dashboard() {
   return (
     <main className="min-h-screen bg-[#14181F] font-sans text-[#E8E6DE]">
       <div className="mx-auto max-w-2xl px-6 py-16">
-        <header className="mb-10 border-b border-[#2A303C] pb-6">
-          <h1 className="font-serif text-3xl font-medium tracking-tight text-[#F6F1E4]">
-            AdminAgent
-          </h1>
-          <p className="mt-2 text-sm text-[#9BA1AE]">
-            Hand it a task. It researches, drafts, and sends — you watch the case unfold below.
-          </p>
+        <header className="mb-10 border-b border-[#2A303C] pb-6 flex justify-between items-start">
+          <div>
+            <h1 className="font-serif text-3xl font-medium tracking-tight text-[#F6F1E4]">
+              AdminAgent
+            </h1>
+            <p className="mt-2 text-sm text-[#9BA1AE]">
+              Hand it a task. It researches, drafts, and sends — you watch the case unfold below.
+            </p>
+          </div>
+          <button
+            onClick={async () => {
+              await supabase.auth.signOut();
+              router.push("/login");
+            }}
+            className="text-sm text-[#9BA1AE] hover:text-[#F6F1E4] transition-colors"
+          >
+            Logout
+          </button>
         </header>
 
         <form
