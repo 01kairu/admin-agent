@@ -114,7 +114,13 @@ export default function LandingPage() {
 
             {/* Footer */}
             <footer className="border-t border-[#2A303C] py-8 text-center text-sm text-[#5C6270]">
-                <p>© {new Date().getFullYear()} AdminAgent. All rights reserved.</p>
+                <div className="mx-auto max-w-6xl px-6">
+                    <p className="mb-2">© {new Date().getFullYear()} AdminAgent. All rights reserved.</p>
+                    <div className="space-x-4">
+                        <Link href="/privacy" className="hover:text-[#9BA1AE]">Privacy Policy</Link>
+                        <Link href="/terms" className="hover:text-[#9BA1AE]">Terms of Service</Link>
+                    </div>
+                </div>
             </footer>
         </main>
     );
