@@ -2,29 +2,6 @@
  * src/lib/agent.ts
  *
  * Core logic for the AdminAgent autonomous agent.
- *
- * WHY THE SHAPE OF THIS FILE:
- * Vercel's free-tier serverless functions time out at 10s. A full
- * "research the company -> ask the AI to draft an email -> send the email"
- * pipeline can easily take longer than that if it runs as one blocking call.
- *
- * The fix isn't to make the pipeline faster — it's to never let the HTTP
- * response wait on the whole pipeline at once. So `runAdminAgent` doesn't
- * return a single value at the end; it accepts an `onStep` callback and
- * invokes it after each stage completes. The API route (Next.js Route
- * Handler) wraps this in a `ReadableStream` and flushes bytes to the client
- * as each `onStep` fires. That keeps the connection "alive" with a steady
- * trickle of data, which is what actually prevents the platform from
- * killing the function — Vercel's timeout is about the function's total
- * execution wall-clock time, not about client inactivity, so streaming
- * doesn't raise the hard limit, but it does mean the user sees real-time
- * progress instead of a blank spinner, and it lets you redesign each stage
- * as its own short-lived call later (see note at the bottom of this file)
- * if a single run ever risks exceeding 10s.
- *
- * `runAdminAgent(taskDescription, userId)` keeps exactly the signature
- * requested. Streaming hooks (`onStep`, `taskId`) are passed as an optional
- * third argument so the function still works if called with just two args.
  */
 
 import Groq from "groq-sdk";
@@ -32,8 +9,7 @@ import { Resend } from "resend";
 import { createClient } from "@supabase/supabase-js";
 
 // ---------------------------------------------------------------------------
-// Clients (server-side only — this file must never be imported into
-// client components; it uses the service role key and secret API keys).
+// Clients (server-side only)
 // ---------------------------------------------------------------------------
 
 const groq = new Groq({
@@ -48,18 +24,19 @@ const supabaseAdmin = createClient(
     { auth: { persistSession: false } }
 );
 
-const GROQ_MODEL = "openai/gpt-oss-120b";
+// Using a reliable, fast Groq model
+const GROQ_MODEL = "llama-3.1-70b-versatile";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export type AgentStepName =
-    | "task_created"
-    | "research"
-    | "draft_email"
-    | "send_email"
-    | "completed"
+    | "searching"
+    | "drafting"
+    | "sending"
+    | "sent"
+    | "complete"
     | "failed";
 
 export interface AgentStep {
@@ -69,19 +46,13 @@ export interface AgentStep {
     timestamp: string;
 }
 
-/** Called after every stage of the pipeline finishes. Used to stream progress. */
 export type OnStepCallback = (step: AgentStep) => void | Promise<void>;
 
 export interface RunAdminAgentOptions {
-    /** Existing task row to attach logs to. If omitted, a new task is created. */
     taskId?: string;
-    /** Fired after each pipeline stage — wire this to a ReadableStream controller. */
     onStep?: OnStepCallback;
-    /** Best-effort guess at target company, e.g. "Netflix". If omitted, the AI infers it. */
     targetCompany?: string;
-    /** Where should the cancellation/negotiation email actually be sent? */
     recipientEmail?: string;
-    /** The user's own email, used as the "from" identity / reply context. */
     userEmail?: string;
 }
 
@@ -100,7 +71,6 @@ function now(): string {
     return new Date().toISOString();
 }
 
-/** Writes a row to agent_logs (service role key bypasses RLS) and fires onStep. */
 async function emitStep(
     taskId: string,
     step: AgentStepName,
@@ -112,7 +82,6 @@ async function emitStep(
 ): Promise<void> {
     const payload: AgentStep = { step, message, data, timestamp: now() };
 
-    // Best-effort logging — a logging failure should never kill the pipeline.
     try {
         await supabaseAdmin.from("agent_logs").insert({
             task_id: taskId,
@@ -157,12 +126,7 @@ async function searchCancellationPolicy(companyName: string): Promise<SerperResu
     }
 
     const data = await response.json();
-
-    const organic = (data.organic ?? []) as Array<{
-        title?: string;
-        link?: string;
-        snippet?: string;
-    }>;
+    const organic = (data.organic ?? []) as Array<{ title?: string; link?: string; snippet?: string }>;
 
     return organic.slice(0, 5).map((r) => ({
         title: r.title ?? "",
@@ -172,7 +136,7 @@ async function searchCancellationPolicy(companyName: string): Promise<SerperResu
 }
 
 // ---------------------------------------------------------------------------
-// Stage 2: Draft the cancellation/negotiation email via Groq
+// Stage 2: Draft the email via Groq
 // ---------------------------------------------------------------------------
 
 async function draftEmailWithGroq(
@@ -186,21 +150,15 @@ async function draftEmailWithGroq(
         .join("\n\n");
 
     const systemPrompt =
-        "You are AdminAgent, an assistant that drafts polite, firm, effective " +
-        "emails on behalf of a user to cancel subscriptions or negotiate bills. " +
-        'Respond ONLY with valid JSON of the shape {"subject": string, "body": string}. ' +
-        "No markdown, no code fences, no commentary outside the JSON.";
+        "You are AdminAgent. Respond ONLY with valid JSON of the shape " +
+        '{"subject": string, "body": string}. No markdown, no code fences.';
 
     const userPrompt =
         `Task: ${taskDescription}\n` +
         `Target company: ${companyName}\n` +
-        `User's email (for signing off): ${userEmail}\n\n` +
-        `Research notes gathered from the web about this company's cancellation ` +
-        `process (may be incomplete or irrelevant — use judgment):\n\n${contextBlock || "No research results found."}\n\n` +
-        `Write a concise, polite, effective email requesting the cancellation ` +
-        `(or renegotiation, if the task implies a bill negotiation). Reference ` +
-        `specifics from the research notes only if they're genuinely relevant. ` +
-        `Sign off as the user.`;
+        `User's email: ${userEmail}\n\n` +
+        `Research notes:\n${contextBlock || "No research results found."}\n\n` +
+        `Write a concise, polite, effective email. Sign off as the user.`;
 
     const completion = await groq.chat.completions.create({
         model: GROQ_MODEL,
@@ -216,12 +174,10 @@ async function draftEmailWithGroq(
 
     let parsed: { subject: string; body: string };
     try {
-        // Strip stray code fences in case the model ignores instructions.
         const cleaned = raw.replace(/^```json\s*|^```\s*|```$/g, "").trim();
         parsed = JSON.parse(cleaned);
     } catch {
-        // Fallback: treat the whole response as the body if JSON parsing fails.
-        parsed = { subject: `Cancellation Request — ${companyName}`, body: raw };
+        parsed = { subject: `Request — ${companyName}`, body: raw };
     }
 
     return { ...parsed, raw, prompt: userPrompt };
@@ -237,8 +193,6 @@ async function sendEmailViaResend(
     body: string,
     fromLabel: string = "AdminAgent <onboarding@resend.dev>"
 ): Promise<{ id: string | null }> {
-    console.log(" Attempting to send email to:", to);
-
     const { data, error } = await resend.emails.send({
         from: fromLabel,
         to,
@@ -247,11 +201,10 @@ async function sendEmailViaResend(
     });
 
     if (error) {
-        console.error("❌ Resend error:", error);
+        console.error("Resend error:", error);
         throw error;
     }
 
-    console.log("✅ Email sent successfully:", data?.id);
     return { id: data?.id ?? null };
 }
 
@@ -259,10 +212,6 @@ async function sendEmailViaResend(
 // Orchestrator
 // ---------------------------------------------------------------------------
 
-/**
- * Runs the full AdminAgent pipeline: research -> draft -> send.
- * Call `onStep` (via options) from an API route to stream progress to the UI.
- */
 export async function runAdminAgent(
     taskDescription: string,
     userId: string,
@@ -272,7 +221,6 @@ export async function runAdminAgent(
     let taskId = options.taskId;
 
     try {
-        // ---- Setup: ensure we have a task row to attach logs to -------------
         if (!taskId) {
             const { data: task, error } = await supabaseAdmin
                 .from("tasks")
@@ -285,32 +233,20 @@ export async function runAdminAgent(
                 .select()
                 .single();
 
-            if (error || !task) {
-                throw new Error(`Failed to create task: ${error?.message}`);
-            }
+            if (error || !task) throw new Error(`Failed to create task: ${error?.message}`);
             taskId = task.id as string;
         }
 
-        await emitStep(taskId, "task_created", `Task ${taskId} started.`, onStep, {
-            taskDescription,
-        });
-
-        // ---- Stage 1: Research ----------------------------------------------
+        // 1. SEARCHING
         await supabaseAdmin.from("tasks").update({ status: "researching" }).eq("id", taskId);
+        await emitStep(taskId, "searching", "Searching", onStep);
 
         const companyGuess = targetCompany ?? inferCompanyName(taskDescription);
         const research = await searchCancellationPolicy(companyGuess);
 
-        await emitStep(
-            taskId,
-            "research",
-            `Found ${research.length} relevant result(s) for "${companyGuess}".`,
-            onStep,
-            { results: research }
-        );
-
-        // ---- Stage 2: Draft email --------------------------------------------
+        // 2. DRAFTING
         await supabaseAdmin.from("tasks").update({ status: "drafting" }).eq("id", taskId);
+        await emitStep(taskId, "drafting", "Drafting", onStep);
 
         const draft = await draftEmailWithGroq(
             taskDescription,
@@ -319,41 +255,34 @@ export async function runAdminAgent(
             userEmail ?? "the user"
         );
 
-        await emitStep(
-            taskId,
-            "draft_email",
-            `Drafted email: "${draft.subject}"`,
-            onStep,
-            { subject: draft.subject, body: draft.body },
-            draft.prompt,
-            draft.raw
-        );
-
-        // ---- Stage 3: Send email ----------------------------------------------
+        // 3. SENDING
         let emailSent = false;
         if (recipientEmail) {
+            await emitStep(taskId, "sending", "Sending", onStep);
             await sendEmailViaResend(recipientEmail, draft.subject, draft.body);
             emailSent = true;
-
-            await emitStep(taskId, "send_email", `Email sent to ${recipientEmail}.`, onStep, {
-                recipientEmail,
-            });
+            await emitStep(taskId, "sent", "Sent", onStep);
         } else {
-            await emitStep(
-                taskId,
-                "send_email",
-                "No recipient email provided — skipped sending, email saved as a draft.",
-                onStep
-            );
+            await emitStep(taskId, "sent", "Sent (Draft only)", onStep);
         }
 
+        // 4. COMPLETE
         await supabaseAdmin.from("tasks").update({ status: "completed" }).eq("id", taskId);
 
         const summary = emailSent
-            ? `Cancellation email sent to ${recipientEmail} on your behalf.`
-            : `Draft email prepared for ${companyGuess}. Provide a recipient email to send it.`;
+            ? `Email sent to ${recipientEmail}.`
+            : `Draft prepared for ${companyGuess}.`;
 
-        await emitStep(taskId, "completed", summary, onStep);
+        await emitStep(
+            taskId,
+            "complete",
+            "Complete",
+            onStep,
+            {
+                research: research.map(r => r.snippet).join("\n"),
+                draft: draft.body
+            }
+        );
 
         return { taskId, status: "completed", emailSent, summary };
     } catch (err) {
@@ -361,7 +290,7 @@ export async function runAdminAgent(
 
         if (taskId) {
             await supabaseAdmin.from("tasks").update({ status: "failed" }).eq("id", taskId);
-            await emitStep(taskId, "failed", `Agent failed: ${message}`, onStep);
+            await emitStep(taskId, "failed", "Failed", onStep, { error: message });
         }
 
         return {
@@ -373,43 +302,7 @@ export async function runAdminAgent(
     }
 }
 
-/** Very rough fallback extractor if no explicit target company is given. */
 function inferCompanyName(taskDescription: string): string {
-    const match = taskDescription.match(
-        /(?:cancel|negotiate|contact)\s+(?:my\s+)?([A-Z][a-zA-Z0-9+&' ]{1,40})/
-    );
+    const match = taskDescription.match(/(?:cancel|negotiate|contact)\s+(?:my\s+)?([A-Z][a-zA-Z0-9+&' ]{1,40})/i);
     return match?.[1]?.trim() ?? taskDescription.slice(0, 40);
 }
-
-// ---------------------------------------------------------------------------
-// USAGE FROM AN API ROUTE (not part of this file — shown here only as a
-// comment so the intended streaming pattern is clear for the next step):
-//
-// export async function POST(req: Request) {
-//   const { taskDescription, userId, recipientEmail, userEmail } = await req.json();
-//
-//   const stream = new ReadableStream({
-//     async start(controller) {
-//       const encoder = new TextEncoder();
-//       await runAdminAgent(taskDescription, userId, {
-//         recipientEmail,
-//         userEmail,
-//         onStep: (step) => {
-//           controller.enqueue(encoder.encode(JSON.stringify(step) + "\n"));
-//         },
-//       });
-//       controller.close();
-//     },
-//   });
-//
-//   return new Response(stream, {
-//     headers: { "Content-Type": "application/x-ndjson" },
-//   });
-// }
-//
-// If a single stage (e.g. research) ever risks pushing total runtime past
-// 10s on its own, split the pipeline further: persist `taskId` + `status`
-// after each stage (already done above), and have the client re-POST to
-// resume from the next stage rather than trying to run the whole thing in
-// one invocation.
-// ---------------------------------------------------------------------------
