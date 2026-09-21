@@ -2,8 +2,10 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
-import UpgradeButton from "./UpgradeButton";
-export const dynamic = 'force-dynamic';
+import dynamic from "next/dynamic";
+
+// Dynamically import UpgradeButton to prevent "window is not defined" SSR errors
+const UpgradeButton = dynamic(() => import("./UpgradeButton"), { ssr: false });
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -163,8 +165,7 @@ export default function DashboardPage() {
 
         {showModal && (
           <div className="fixed inset-0 flex items-center justify-center z-50">
-            <div className={`rounded-sm px-8 py-6 shadow-2xl border ${modalType === "error" ? "bg-red-950/90 border-red-800" : "bg-[#1E2430]/95 border-[#C98A2C]"
-              }`}>
+            <div className={`rounded-sm px-8 py-6 shadow-2xl border ${modalType === "error" ? "bg-red-950/90 border-red-800" : "bg-[#1E2430]/95 border-[#C98A2C]"}`}>
               <div className="flex items-center gap-3">
                 {isRunning ? (
                   <>
