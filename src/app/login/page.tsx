@@ -29,7 +29,7 @@ export default function LoginPage() {
         } else {
             const { error } = await supabase.auth.signInWithPassword({ email, password });
             if (error) setMessage(error.message);
-            else router.push("/"); // Redirect to dashboard on success
+            else router.push("/dashboard"); // Redirect to dashboard on success
         }
         setIsLoading(false);
     }
