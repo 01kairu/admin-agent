@@ -65,7 +65,8 @@ export default function UpgradeButton({ userEmail, userId }: UpgradeButtonProps)
         amount: currencyData.amount,
         currency: currencyData.code,
         publicKey: publicKey,
-        text: `Upgrade to Pro`,
+        // 👇 THIS IS THE FIX: Include the dynamic label in the text prop
+        text: isProcessing ? "Processing..." : `Upgrade to Pro - ${currencyData.label}`,
         onSuccess: async (reference: any) => {
             setIsProcessing(true);
             console.log("Payment successful:", reference);
@@ -115,6 +116,7 @@ export default function UpgradeButton({ userEmail, userId }: UpgradeButtonProps)
                 className="w-full bg-[#C98A2C] hover:bg-[#B47A22] text-[#1B1B16] font-bold py-3 px-4 rounded-sm transition-colors disabled:opacity-50"
                 disabled={isProcessing}
             >
+                {/* Children are kept as fallback, but the 'text' prop now handles the main label */}
                 {isProcessing ? "Processing..." : `Upgrade to Pro - ${currencyData.label}`}
             </PaystackButton>
         </div>
