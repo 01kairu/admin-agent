@@ -19,7 +19,7 @@ const supabaseAdmin = createClient(
 );
 
 // ✅ WORKING MODEL - Mixtral 8x7B
-const GROQ_MODEL = "llama-3.1-8b-instant";
+const GROQ_MODEL = "gemma2-9b-it";
 
 // ---------------------------------------------------------------------------
 // Types
