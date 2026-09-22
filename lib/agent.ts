@@ -25,7 +25,7 @@ const supabaseAdmin = createClient(
 );
 
 // Using a reliable, fast Groq model
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "llama-3.1-8b-instant";
 
 // ---------------------------------------------------------------------------
 // Types
