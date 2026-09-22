@@ -18,8 +18,8 @@ const supabaseAdmin = createClient(
     { auth: { persistSession: false } }
 );
 
-// ✅ WORKING MODEL - Mixtral 8x7B
-const GROQ_MODEL = "openai/gpt-oss-20b";
+// ✅ FUTURE-PROOF MODEL: Reads from environment variable, with a fallback
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -178,20 +178,24 @@ async function draftEmailWithGroq(
 }
 
 // ---------------------------------------------------------------------------
-// Stage 3: Send the email via Resend
+// Stage 3: Send the email via Resend (FIXED FOR ALL USERS)
 // ---------------------------------------------------------------------------
 
 async function sendEmailViaResend(
     to: string,
     subject: string,
     body: string,
+    userEmail: string, // Added to set Reply-To
     fromLabel: string = "AdminAgent <onboarding@resend.dev>"
 ): Promise<{ id: string | null }> {
     const { data, error } = await resend.emails.send({
-        from: fromLabel,
+        from: fromLabel, // Always sends from your verified Resend address
         to,
         subject,
         html: body,
+        headers: {
+            "Reply-To": userEmail, // Replies will go to the actual user
+        },
     });
 
     if (error) {
@@ -253,7 +257,8 @@ export async function runAdminAgent(
         let emailSent = false;
         if (recipientEmail) {
             await emitStep(taskId, "sending", "Sending", onStep);
-            await sendEmailViaResend(recipientEmail, draft.subject, draft.body);
+            // Updated call to include userEmail for the Reply-To header
+            await sendEmailViaResend(recipientEmail, draft.subject, draft.body, userEmail ?? "the user");
             emailSent = true;
             await emitStep(taskId, "sent", "Sent", onStep);
         } else {
