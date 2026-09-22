@@ -19,7 +19,7 @@ const supabaseAdmin = createClient(
 );
 
 // ✅ WORKING MODEL - Mixtral 8x7B
-const GROQ_MODEL = "gemma2-9b-it";
+const GROQ_MODEL = "openai/gpt-oss-20b";
 
 // ---------------------------------------------------------------------------
 // Types
