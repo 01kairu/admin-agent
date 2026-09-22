@@ -1,9 +1,3 @@
-/**
- * src/lib/agent.ts
- *
- * Core logic for the AdminAgent autonomous agent.
- */
-
 import Groq from "groq-sdk";
 import { Resend } from "resend";
 import { createClient } from "@supabase/supabase-js";
@@ -24,8 +18,8 @@ const supabaseAdmin = createClient(
     { auth: { persistSession: false } }
 );
 
-// Using a reliable, fast Groq model
-const GROQ_MODEL = "llama3-8b-8192";
+// ✅ WORKING MODEL - Mixtral 8x7B
+const GROQ_MODEL = "mixtral-8x7b-32768";
 
 // ---------------------------------------------------------------------------
 // Types
