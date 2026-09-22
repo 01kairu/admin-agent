@@ -229,7 +229,8 @@ export default function DashboardPage() {
             disabled={isRunning}
           />
 
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          {/* FIXED: Added items-end to align the input boxes perfectly at the bottom */}
+          <div className="grid grid-cols-2 gap-4 mb-4 items-end">
             <div>
               <label className="block text-sm font-medium text-[#1B1B16] mb-2">Your email</label>
               <input
